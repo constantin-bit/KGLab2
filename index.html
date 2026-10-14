@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Lab2</title>
+  <style>
+    canvas {
+      border: 3px solid rgb(0, 0, 0);
+      max-width: 600px;
+      max-height: 400px;
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    span {
+      margin-left: 15px; 
+      font-weight: bold; 
+      color: #007bff;
+    }
+    .mainBlock {
+      display: flex; 
+      gap: 30px;
+    }
+    .block {
+      flex-direction: column;
+      display: flex;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+<div class="mainBlock">
+  <div class="block">
+    <canvas id="imageCanvas"></canvas>
+    <canvas id="resultCanvas"></canvas>
+  </div>
+  <div class="block">
+    <input type="file" id="fileInput" accept="image/*">
+    <button id="btnThresholdSimple">Простой порог (Т=128)</button>
+    <button id="btnThresholdIterative">Итеративный порог</button>
+    <span id="thresholdInfo" ></span>
+    <button id="btnBrightness">Сегментация (Обнаружение перепадов яркости)</button>
+    <button id="btnLines">Сегментация (Обнаружение линий)</button>
+    <button id="btnPoints">Сегментация (Обнаружение точек)</button>
+  </div>
+</div>
+
+<script>
+  const fileInput = document.getElementById('fileInput');
+  const thresholdInfo = document.getElementById('thresholdInfo');
+
+  const canvas = document.getElementById('imageCanvas');
+  const ctx = canvas.getContext('2d');
+  const resultCanvas = document.getElementById('resultCanvas');
+  const resultCtx = resultCanvas.getContext('2d');
+  
+  const btnThresholdSimple = document.getElementById('btnThresholdSimple');
+  const btnThresholdIterative = document.getElementById('btnThresholdIterative');
+  const btnBrightness = document.getElementById('btnBrightness');
+  const btnLines = document.getElementById('btnLines');
+  const btnPoints = document.getElementById('btnPoints');  
+  
+  let originalImageData = null;
+
+  fileInput.addEventListener('change', function(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const img = new Image();
+      img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        resultCanvas.width = img.width;
+        resultCanvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        thresholdInfo.innerText = "";
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  btnThresholdSimple.addEventListener('click', function() {
+      if (!originalImageData) return;
+      applySimpleThreshold(128);
+      thresholdInfo.innerText = "Применен порог: 128";
+  });
+
+  btnThresholdIterative.addEventListener('click', function() {
+    if (!originalImageData) return;
+    const pixels = originalImageData.data;
+    let totalBrightness = 0;
+    let pixelCount = pixels.length / 4;
+    for (let i = 0; i < pixels.length; i += 4) {
+        totalBrightness += 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
+    }
+    let T = totalBrightness / pixelCount;
+    let deltaT = 0.5; 
+    let done = false;
+    while (!done) {
+        let sumDark = 0, countDark = 0;
+        let sumLight = 0, countLight = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+            let gray = 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
+            if (gray >= T) {
+                sumLight += gray;
+                countLight++;
+            } else {
+                sumDark += gray;
+                countDark++;
+            }
+        }
+        let muLight = countLight > 0 ? sumLight / countLight : 0;
+        let muDark = countDark > 0 ? sumDark / countDark : 0;
+        let newT = (muLight + muDark) / 2;
+        if (Math.abs(T - newT) < deltaT) {
+            done = true;
+        }
+        T = newT;
+    }
+    const finalThreshold = Math.round(T);
+    applySimpleThreshold(finalThreshold);
+    thresholdInfo.innerText = `Авто-порог: ${finalThreshold}`;
+  });
+
+  btnBrightness.addEventListener('click', function() {
+      if (!originalImageData) return;
+      applyBrightnessSegmentation();
+      thresholdInfo.innerText = "Сегментация: Оператор Собеля (Перепады яркости)";
+  });
+
+  btnLines.addEventListener('click', function() {
+      if (!originalImageData) return;
+      applyLinesSegmentation();
+      thresholdInfo.innerText = "Сегментация: Обнаружение линий";
+  });
+
+  btnPoints.addEventListener('click', function() {
+      if (!originalImageData) return;
+      applyPointsSegmentation();
+      thresholdInfo.innerText = "Сегментация: Обнаружение изолированных точек";
+  });
+
+  function applySimpleThreshold(T) {
+      const imgDataCopy = resultCtx.createImageData(canvas.width, canvas.height);
+      imgDataCopy.data.set(originalImageData.data);
+      const pixels = imgDataCopy.data;
+      for (let i = 0; i < pixels.length; i += 4) {
+          const gray = 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
+          let finalColor = gray >= T ? 255 : 0;
+          pixels[i] = finalColor;
+          pixels[i + 1] = finalColor;
+          pixels[i + 2] = finalColor;
+      }
+      resultCtx.putImageData(imgDataCopy, 0, 0);
+  }
+
+  function applyBrightnessSegmentation() {
+    const width = canvas.width;
+    const height = canvas.height;
+    const pixels = originalImageData.data;
+
+    const grayMatrix = Array(height).fill().map(() => new Float32Array(width));
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        grayMatrix[y][x] = 0.299 * pixels[idx] + 0.587 * pixels[idx+1] + 0.114 * pixels[idx+2];
+      }
+    }
+
+    const imgDataCopy = resultCtx.createImageData(width, height);
+    const resPixels = imgDataCopy.data;
+
+    const Gx = [
+        [-1, 0, 1],
+        [-2, 0, 2],
+        [-1, 0, 1]
+    ];
+    const Gy = [
+        [-1, -2, -1],
+        [ 0,  0,  0],
+        [ 1,  2,  1]
+    ];
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        let valX = 0;
+        let valY = 0;
+
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const neighborGray = grayMatrix[y + ky][x + kx];
+            valX += neighborGray * Gx[ky + 1][kx + 1];
+            valY += neighborGray * Gy[ky + 1][kx + 1];
+          }
+        }
+
+        let gradient = Math.sqrt(valX * valX + valY * valY);
+        if (gradient > 255) gradient = 255;
+
+        const idx = (y * width + x) * 4;
+        resPixels[idx]     = gradient; 
+        resPixels[idx + 1] = gradient; 
+        resPixels[idx + 2] = gradient; 
+        resPixels[idx + 3] = 255;      
+      }
+    }
+    resultCtx.putImageData(imgDataCopy, 0, 0);
+  }
+
+  function applyLinesSegmentation() {
+    const width = canvas.width;
+    const height = canvas.height;
+    const pixels = originalImageData.data;
+
+    const grayMatrix = Array(height).fill().map(() => new Float32Array(width));
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        grayMatrix[y][x] = 0.299 * pixels[idx] + 0.587 * pixels[idx+1] + 0.114 * pixels[idx+2];
+      }
+    }
+
+    const imgDataCopy = resultCtx.createImageData(width, height);
+    const resPixels = imgDataCopy.data;
+
+    const K = [
+        [-1, -1, -1],
+        [-1,  8, -1],
+        [-1, -1, -1]
+    ];
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        let sum = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            sum += grayMatrix[y + ky][x + kx] * K[ky + 1][kx + 1];
+          }
+        }
+        let finalVal = Math.abs(sum);
+        if (finalVal > 255) finalVal = 255;
+
+        const idx = (y * width + x) * 4;
+        resPixels[idx]     = finalVal;
+        resPixels[idx + 1] = finalVal;
+        resPixels[idx + 2] = finalVal;
+        resPixels[idx + 3] = 255;
+      }
+    }
+    resultCtx.putImageData(imgDataCopy, 0, 0);
+  }
+
+  function applyPointsSegmentation() {
+    const width = canvas.width;
+    const height = canvas.height;
+    const pixels = originalImageData.data;
+
+    const grayMatrix = Array(height).fill().map(() => new Float32Array(width));
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        grayMatrix[y][x] = 0.299 * pixels[idx] + 0.587 * pixels[idx+1] + 0.114 * pixels[idx+2];
+      }
+    }
+
+    const imgDataCopy = resultCtx.createImageData(width, height);
+    const resPixels = imgDataCopy.data;
+
+    const K = [
+        [-1, -1, -1],
+        [-1,  8, -1],
+        [-1, -1, -1]
+    ];
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        let sum = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            sum += grayMatrix[y + ky][x + kx] * K[ky + 1][kx + 1];
+          }
+        }
+
+        let finalVal = Math.abs(sum);
+
+        if (finalVal > 120) {
+            finalVal = 255; 
+        } else {
+          finalVal = 0;   
+        }
+
+        const idx = (y * width + x) * 4;
+        resPixels[idx] = finalVal;
+        resPixels[idx + 1] = finalVal;
+        resPixels[idx + 2] = finalVal;
+        resPixels[idx + 3] = 255;
+      }
+    }
+    resultCtx.putImageData(imgDataCopy, 0, 0);
+  }
+</script>
+</body>
+</html>
